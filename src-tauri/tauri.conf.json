@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "aug-session-sync",
   "version": "0.1.0",
-  "identifier": "com.cubezhao.aug-session-sync",
+  "identifier": "com.lantianzhi.aug-session-sync",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
