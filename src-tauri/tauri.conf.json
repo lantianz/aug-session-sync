@@ -13,10 +13,11 @@
     "windows": [
       {
         "title": "文本内容获取与保存工具",
-        "width": 500,
-        "height": 475,
+        "width": 950,
+        "height": 650,
         "minWidth": 500,
-        "minHeight": 475,
+        "minHeight": 500,
+        "center": true,
         "decorations": false,
         "transparent": false
       }

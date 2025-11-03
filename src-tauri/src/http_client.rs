@@ -1,14 +1,15 @@
 use reqwest::Client;
 use std::time::Duration;
 
-/// 创建HTTP客户端
+/// 创建HTTP客户端（支持 cookies）
 pub fn create_client() -> Result<Client, String> {
     let client = Client::builder()
         .timeout(Duration::from_secs(30))
         .connect_timeout(Duration::from_secs(10))
+        .cookie_store(true)  // 启用 cookie 存储
         .build()
         .map_err(|e| format!("创建HTTP客户端失败: {}", e))?;
-    
+
     Ok(client)
 }
 
