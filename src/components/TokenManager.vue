@@ -266,7 +266,7 @@ const columns = [
   {
     title: '操作',
     key: 'actions',
-    width: 180,
+    width: 200,
     fixed: 'right',
     render: (row) => {
       return h(
