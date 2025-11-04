@@ -16,6 +16,7 @@ import {
   NDescriptions,
   NDescriptionsItem,
   NSelect,
+  NNumberAnimation,
   useMessage
 } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
@@ -28,7 +29,7 @@ const loading = ref(false)
 const searchKeyword = ref('')
 const sortOption = ref('created_at_desc')
 const currentPage = ref(1)
-const pageSize = ref(15)
+const pageSize = ref(10)
 
 // 表格容器引用和高度
 const tableContainerRef = ref(null)
@@ -49,8 +50,15 @@ const currentEditToken = ref(null)
 const editFormData = ref({})
 const editLoading = ref(false)
 
-// 解析加载状态（记录正在解析的 Token ID）
-const parsingTokenId = ref(null)
+// 解析加载状态（使用 Map 记录每个 Token 的解析状态）
+const parsingTokensMap = ref(new Map())
+
+// 全部解析状态 - 使用 localStorage 持久化
+const batchParsingLoading = ref(false)
+const batchParsingProgress = ref({ current: 0, total: 0 })
+
+// 批量解析时收集的更新数据
+const batchUpdatedTokens = ref(new Map())
 
 // 排序选项
 const sortOptions = [
@@ -168,6 +176,37 @@ function formatDate(dateString) {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
 }
 
+// 根据点数获取标签类型
+function getCreditsTagType(credits) {
+  if (credits <= 500) {
+    return 'error'
+  } else if (credits <= 5000) {
+    return 'warning'
+  }
+  return 'success'
+}
+
+// 渲染点数标签
+function renderCreditsTag(credits) {
+  const creditsValue = credits ?? 0
+  const type = getCreditsTagType(creditsValue)
+
+  return h(
+    NTag,
+    { type, size: 'small' },
+    {
+      // 暂时注释掉动画效果,直接显示数字
+      default: () => creditsValue
+      // default: () => h(NNumberAnimation, {
+      //   from: 0,
+      //   to: creditsValue,
+      //   duration: 1000,
+      //   precision: 0
+      // })
+    }
+  )
+}
+
 // 表格列定义
 const columns = [
   {
@@ -233,7 +272,7 @@ const columns = [
     title: '点数',
     key: 'credits',
     width: 100,
-    render: (row) => row.portal_info?.credits_balance || '-'
+    render: (row) => renderCreditsTag(row.portal_info?.credits_balance)
   },
   {
     title: '租户 URL',
@@ -317,12 +356,12 @@ const columns = [
                     text: true,
                     type: 'info',
                     size: 'small',
-                    loading: parsingTokenId.value === row.id,
+                    loading: parsingTokensMap.value.has(row.id),
                     onClick: () => handleParse(row)
                   },
                   { default: () => '解析' }
                 ),
-                default: () => '重新解析 Session'
+                default: () => '解析 Session'
               }
             )
           ]
@@ -380,21 +419,34 @@ async function saveEdit() {
 }
 
 // 解析 Session
-async function handleParse(token) {
+async function handleParse(token, options = {}) {
+  const { silent = false, skipReload = false } = options
+
   if (!token.auth_session) {
-    message?.warning('该 Token 没有 auth_session 字段')
-    return
+    if (!silent) {
+      message?.warning('该 Token 没有 auth_session 字段')
+    }
+    return { success: false, error: '缺少 auth_session' }
   }
 
-  parsingTokenId.value = token.id
+  // 设置该 Token 的解析状态
+  parsingTokensMap.value.set(token.id, true)
+  if (!silent) {
+    console.log(`[单个解析] 开始解析 Token ID: ${token.id}`)
+  }
+
   try {
-    console.log('=== 开始重新解析 Session ===')
-    console.log('Token ID:', token.id)
-    console.log('Session:', token.auth_session.substring(0, 50) + '...')
+    if (!silent) {
+      console.log('=== 开始解析 Session ===')
+      console.log('Token ID:', token.id)
+      console.log('Session:', token.auth_session.substring(0, 50) + '...')
+    }
 
     // 调用后端解析命令
     const result = await invoke('parse_session', { session: token.auth_session })
-    console.log('解析结果:', result)
+    if (!silent) {
+      console.log('解析结果:', result)
+    }
 
     // 构建更新后的 token 对象
     const updatedToken = {
@@ -403,7 +455,7 @@ async function handleParse(token) {
       access_token: result.access_token || token.access_token,
       email_note: result.email || token.email_note,
       portal_info: {
-        credits_balance: result.credits_balance || token.portal_info?.credits_balance || 0,
+        credits_balance: result.credits_balance ?? token.portal_info?.credits_balance ?? 0,
         expiry_date: result.expiry_date || token.portal_info?.expiry_date || ''
       },
       updated_at: new Date().toISOString()
@@ -412,16 +464,115 @@ async function handleParse(token) {
     // 调用后端更新命令
     await invoke('update_token', { token: updatedToken })
 
-    console.log('=== 解析并更新成功 ===')
-    message?.success('Session 解析成功，Token 信息已更新')
+    if (!silent) {
+      console.log('=== 解析并更新成功 ===')
+      message?.success('Session 解析成功，Token 信息已更新')
+    }
 
-    // 重新加载数据
-    await loadTokens()
+    // 如果不是批量解析模式,立即重新加载数据
+    if (!skipReload) {
+      await loadTokens()
+    }
+
+    return { success: true, updatedToken }
   } catch (error) {
-    console.error('解析失败:', error)
-    message?.error(`解析失败: ${error}`)
+    console.error(`[解析失败] Token ID: ${token.id}, 错误:`, error)
+    if (!silent) {
+      message?.error(`解析失败: ${error}`)
+    }
+    return { success: false, error: error.toString() }
   } finally {
-    parsingTokenId.value = null
+    // 清除该 Token 的解析状态
+    parsingTokensMap.value.delete(token.id)
+    if (!silent) {
+      console.log(`[单个解析] Token ID ${token.id} 解析状态已清除`)
+    }
+  }
+}
+
+// 全部解析功能
+async function handleBatchParse() {
+  const tokensToProcess = filteredTokens.value
+
+  if (tokensToProcess.length === 0) {
+    message?.warning('没有可解析的 Token')
+    return
+  }
+
+  console.log('[批量解析] 开始批量解析,总数:', tokensToProcess.length)
+
+  // 设置初始状态
+  batchParsingLoading.value = true
+  batchParsingProgress.value = { current: 0, total: tokensToProcess.length }
+  batchUpdatedTokens.value.clear()
+
+  // 保存状态到 localStorage
+  saveBatchParsingState()
+
+  let successCount = 0
+  let failedCount = 0
+  const concurrentLimit = 3 // 并发限制
+  const queue = [...tokensToProcess]
+
+  try {
+    // 并发处理函数
+    const processToken = async () => {
+      while (queue.length > 0) {
+        const token = queue.shift()
+        if (!token) break
+
+        // 更新进度
+        const currentProgress = tokensToProcess.length - queue.length
+        batchParsingProgress.value.current = currentProgress
+        console.log(`[批量解析] 进度: ${currentProgress}/${tokensToProcess.length}`)
+
+        // 解析 Token,跳过立即刷新
+        const result = await handleParse(token, { silent: true, skipReload: true })
+
+        if (result.success) {
+          successCount++
+          // 收集更新的 Token 数据
+          if (result.updatedToken) {
+            batchUpdatedTokens.value.set(token.id, result.updatedToken)
+          }
+        } else {
+          failedCount++
+        }
+      }
+    }
+
+    // 创建并发任务
+    const workers = Array(Math.min(concurrentLimit, tokensToProcess.length))
+      .fill(null)
+      .map(() => processToken())
+
+    // 等待所有任务完成
+    await Promise.all(workers)
+
+    console.log('[批量解析] 所有任务完成,成功:', successCount, '失败:', failedCount)
+
+    // 批量解析完成后,统一刷新一次数据
+    console.log('[批量解析] 开始刷新数据...')
+    await loadTokens()
+    console.log('[批量解析] 数据刷新完成')
+
+    // 显示结果
+    message?.success(`解析完成: 成功 ${successCount} 个，失败 ${failedCount} 个`)
+  } catch (error) {
+    console.error('[批量解析] 批量解析出错:', error)
+    message?.error(`批量解析出错: ${error}`)
+  } finally {
+    console.log('[批量解析] 清除状态...')
+
+    // 先清除 localStorage,避免 watch 触发时重新保存
+    clearBatchParsingState()
+
+    // 然后清除内存状态
+    batchParsingLoading.value = false
+    batchParsingProgress.value = { current: 0, total: 0 }
+    batchUpdatedTokens.value.clear()
+
+    console.log('[批量解析] 状态已清除')
   }
 }
 
@@ -467,14 +618,60 @@ async function handleRemoteImport() {
 function calculateTableHeight() {
   if (tableContainerRef.value) {
     const containerHeight = tableContainerRef.value.offsetHeight
-    // 减去 NCard 的 padding (上下各 16px = 32px) 和 NCard 自身的边框/间距 (约 2px)
-    tableHeight.value = containerHeight - 66
+    tableHeight.value = containerHeight - 72
   }
 }
 
 // 监听窗口大小变化
 function handleResize() {
   calculateTableHeight()
+}
+
+// 从 localStorage 恢复批量解析状态
+function restoreBatchParsingState() {
+  try {
+    const savedState = localStorage.getItem('batch_parsing_state')
+    if (savedState) {
+      const state = JSON.parse(savedState)
+      // 只有在 loading 为 true 且有有效进度时才恢复状态
+      if (state.loading && state.progress && state.progress.total > 0) {
+        console.log('[状态恢复] 检测到未完成的批量解析:', state.progress)
+        batchParsingLoading.value = state.loading
+        batchParsingProgress.value = state.progress
+      } else {
+        console.log('[状态恢复] 检测到无效或已完成的状态,清除')
+        clearBatchParsingState()
+      }
+    }
+  } catch (error) {
+    console.error('[状态恢复] 恢复批量解析状态失败:', error)
+    clearBatchParsingState()
+  }
+}
+
+// 保存批量解析状态到 localStorage
+function saveBatchParsingState() {
+  try {
+    const state = {
+      loading: batchParsingLoading.value,
+      progress: batchParsingProgress.value,
+      timestamp: Date.now() // 添加时间戳用于调试
+    }
+    console.log('[状态保存] 保存批量解析状态:', state)
+    localStorage.setItem('batch_parsing_state', JSON.stringify(state))
+  } catch (error) {
+    console.error('[状态保存] 保存批量解析状态失败:', error)
+  }
+}
+
+// 清除批量解析状态
+function clearBatchParsingState() {
+  try {
+    console.log('[状态清除] 清除批量解析状态')
+    localStorage.removeItem('batch_parsing_state')
+  } catch (error) {
+    console.error('[状态清除] 清除批量解析状态失败:', error)
+  }
 }
 
 // 组件挂载时加载数据
@@ -486,6 +683,9 @@ onMounted(() => {
   if (savedApiUrl) {
     remoteApiUrl.value = savedApiUrl
   }
+
+  // 恢复批量解析状态
+  restoreBatchParsingState()
 
   // 计算初始高度
   nextTick(() => {
@@ -499,6 +699,11 @@ onMounted(() => {
 // 组件卸载时移除监听
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
+
+  // 如果正在批量解析,保存状态
+  if (batchParsingLoading.value) {
+    saveBatchParsingState()
+  }
 })
 
 // 监听 API URL 变化，保存到 localStorage
@@ -507,6 +712,14 @@ watch(remoteApiUrl, (newUrl) => {
     localStorage.setItem('remote_api_url', newUrl)
   }
 })
+
+// 监听批量解析进度变化,实时保存 (仅在解析中时保存)
+watch(batchParsingProgress, (newProgress) => {
+  // 只有在 loading 状态且进度有效时才保存
+  if (batchParsingLoading.value && newProgress.total > 0) {
+    saveBatchParsingState()
+  }
+}, { deep: true })
 </script>
 
 <template>
@@ -529,8 +742,18 @@ watch(remoteApiUrl, (newUrl) => {
         <NButton type="primary" @click="handleSearch">
           检索
         </NButton>
+      </NSpace>
+      <NSpace :size="12" align="center" style="margin-top: 8px;">
         <NButton @click="showRemoteDialog = true">
           远端加载
+        </NButton>
+        <NButton
+          type="info"
+          :loading="batchParsingLoading"
+          :disabled="filteredTokens.length === 0"
+          @click="handleBatchParse"
+        >
+          {{ batchParsingLoading ? `正在解析 ${batchParsingProgress.current}/${batchParsingProgress.total}` : '全部解析' }}
         </NButton>
         <NButton disabled>
           同步 ATM
@@ -665,7 +888,7 @@ watch(remoteApiUrl, (newUrl) => {
             </NTag>
           </NDescriptionsItem>
           <NDescriptionsItem label="点数余额">
-            <span style="font-family: Consolas, monospace;">{{ currentDetailToken.portal_info?.credits_balance || '-' }}</span>
+            <component :is="() => renderCreditsTag(currentDetailToken.portal_info?.credits_balance)" />
           </NDescriptionsItem>
           <NDescriptionsItem label="过期时间">
             <span style="font-family: Consolas, monospace;">{{ formatDate(currentDetailToken.portal_info?.expiry_date) }}</span>
@@ -722,7 +945,9 @@ watch(remoteApiUrl, (newUrl) => {
             <NInput :value="currentEditToken.ban_status === 'ACTIVE' ? '正常' : currentEditToken.ban_status === 'BANNED' ? '已封禁' : '未知'" disabled style="font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif;" />
           </NFormItem>
           <NFormItem label="点数余额">
-            <NInput :value="String(currentEditToken.portal_info?.credits_balance || 0)" disabled style="font-family: Consolas, monospace;" />
+            <div style="display: flex; align-items: center;">
+              <component :is="() => renderCreditsTag(currentEditToken.portal_info?.credits_balance)" />
+            </div>
           </NFormItem>
           <NFormItem label="过期时间">
             <NInput :value="formatDate(currentEditToken.portal_info?.expiry_date)" disabled style="font-family: Consolas, monospace;" />

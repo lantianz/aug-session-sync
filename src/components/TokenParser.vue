@@ -109,7 +109,7 @@ async function parseContent() {
       email_note: result.email || null,
       auth_session: session,
       suspensions: null,
-      credits_balance: result.credits_balance || null,
+      credits_balance: result.credits_balance ?? null,
       expiry_date: result.expiry_date || null,
       ban_status: 'ACTIVE',
     }
@@ -172,7 +172,7 @@ async function saveToTokenManager() {
       portal_url: parsedData.value.portal_url,
       ban_status: parsedData.value.ban_status,
       portal_info:
-        parsedData.value.credits_balance || parsedData.value.expiry_date
+        parsedData.value.credits_balance != null || parsedData.value.expiry_date
           ? {
             credits_balance: parsedData.value.credits_balance,
             expiry_date: parsedData.value.expiry_date,
