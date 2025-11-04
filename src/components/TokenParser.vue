@@ -1,6 +1,15 @@
 <script setup>
 import { ref, h, defineComponent, onMounted, watch } from 'vue'
-import { NCard, NInput, NButton, NSpace, NGrid, NGridItem, NIcon, useMessage } from 'naive-ui'
+import {
+  NCard,
+  NInput,
+  NButton,
+  NSpace,
+  NGrid,
+  NGridItem,
+  NIcon,
+  useMessage,
+} from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
 
 const message = useMessage()
@@ -10,17 +19,29 @@ const loading = ref(false)
 const isParsed = ref(false)
 const parsedData = ref(null)
 
-// 组件挂载时从 localStorage 恢复解析文本
+// 组件挂载时从 localStorage 恢复解析文本和 URL
 onMounted(() => {
   const savedText = localStorage.getItem('parser_session_text')
   if (savedText) {
     textContent.value = savedText
+  }
+
+  const savedUrl = localStorage.getItem('parser_session_url')
+  if (savedUrl) {
+    url.value = savedUrl
   }
 })
 
 // 监听文本内容变化，保存到 localStorage
 watch(textContent, (newText) => {
   localStorage.setItem('parser_session_text', newText)
+})
+
+// 监听 URL 变化，保存到 localStorage
+watch(url, (newUrl) => {
+  if (newUrl) {
+    localStorage.setItem('parser_session_url', newUrl)
+  }
 })
 
 // 获取文本内容
@@ -75,7 +96,7 @@ async function parseContent() {
   try {
     console.log('步骤2: 调用后端 parse_session 命令...')
     const session = textContent.value.trim()
-    
+
     const result = await invoke('parse_session', { session })
     console.log('步骤3: 后端返回结果:', result)
 
@@ -90,7 +111,7 @@ async function parseContent() {
       suspensions: null,
       credits_balance: result.credits_balance || null,
       expiry_date: result.expiry_date || null,
-      ban_status: 'ACTIVE'
+      ban_status: 'ACTIVE',
     }
     console.log('Token 数据:', tokenData)
 
@@ -104,24 +125,24 @@ async function parseContent() {
     console.log('步骤6: 保存解析结果')
     parsedData.value = tokenData
     isParsed.value = true
-    
+
     console.log('=== 解析成功 ===')
     console.log('解析后的数据:', parsedData.value)
     console.log('isParsed 状态:', isParsed.value)
-    
+
     message?.success('Session 解析成功！已提取 Token 信息')
   } catch (error) {
     console.log('=== 解析失败 ===')
     console.error('错误信息:', error)
-    
+
     isParsed.value = false
     parsedData.value = null
-    
+
     let errorMessage = error.toString()
     if (errorMessage.includes('SESSION_ERROR_OR_ACCOUNT_BANNED')) {
       errorMessage = 'Session 无效或账号已被封禁'
     }
-    
+
     message?.error(`解析失败: ${errorMessage}`)
   } finally {
     loading.value = false
@@ -137,9 +158,11 @@ async function saveToTokenManager() {
 
   try {
     // 生成唯一 ID
-    const id = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15)
+    const id =
+      Math.random().toString(36).substring(2, 15) +
+      Math.random().toString(36).substring(2, 15)
     const now = new Date().toISOString()
-    
+
     const tokenRecord = {
       id,
       tenant_url: parsedData.value.tenant_url,
@@ -148,17 +171,20 @@ async function saveToTokenManager() {
       updated_at: now,
       portal_url: parsedData.value.portal_url,
       ban_status: parsedData.value.ban_status,
-      portal_info: parsedData.value.credits_balance || parsedData.value.expiry_date ? {
-        credits_balance: parsedData.value.credits_balance,
-        expiry_date: parsedData.value.expiry_date
-      } : null,
+      portal_info:
+        parsedData.value.credits_balance || parsedData.value.expiry_date
+          ? {
+            credits_balance: parsedData.value.credits_balance,
+            expiry_date: parsedData.value.expiry_date,
+          }
+          : null,
       email_note: parsedData.value.email_note,
       tag_name: null,
       tag_color: null,
       auth_session: parsedData.value.auth_session,
       suspensions: parsedData.value.suspensions,
       skip_check: false,
-      balance_color_mode: null
+      balance_color_mode: null,
     }
 
     await invoke('add_token', { token: tokenRecord })
@@ -170,76 +196,47 @@ async function saveToTokenManager() {
 </script>
 
 <template>
-  <div style="padding: 20px;">
-    <NSpace vertical :size="16">
-      <!-- URL 输入和获取 -->
-      <NCard title="获取 Session" size="small">
-        <NSpace vertical :size="12">
-          <NInput
-            v-model:value="url"
-            placeholder="请输入包含 Session 的 URL"
-            :disabled="loading"
-            @keyup.enter="fetchText"
-          />
-          <NButton
-            type="primary"
-            :loading="loading"
-            @click="fetchText"
-            block
-          >
-            获取文本
-          </NButton>
-        </NSpace>
-      </NCard>
+  <div style="padding: 20px; height: 100%;">
+    <NSpace vertical :size="16" :wrap-item="false" style="height: 100%;">
+      <!-- 操作按钮 -->
+      <NSpace :size="12" :wrap-item="false" :wrap="false">
+        <!-- URL 输入和获取 -->
+        <NCard title="获取 Session" size="small" style="height: 100%;">
+          <NSpace :size="12" align="center" item-class="get-text-card_item">
+            <NInput v-model:value="url" placeholder="请输入包含 Session 的 URL" :disabled="loading"
+              @keyup.enter="fetchText" />
+            <NButton type="primary" :loading="loading" @click="fetchText" block>
+              获取文本
+            </NButton>
+          </NSpace>
+        </NCard>
+        <NCard title="解析 Session" size="small" style="height: 100%;">
+          <NSpace :size="12" align="center">
+            <NButton type="primary" @click="parseContent" :loading="loading" size="medium">
+              解析
+            </NButton>
+            <NButton type="success" @click="saveToTokenManager" :disabled="!isParsed" size="medium">
+              保存到 Token 管理
+            </NButton>
+          </NSpace>
+        </NCard>
+      </NSpace>
 
       <!-- 文本内容显示 -->
-      <NCard title="文本内容" size="small">
+      <NCard title="文本内容" size="small" style="height: 100%;">
         <template #header-extra>
-          <NButton
-            text
-            @click="copyToClipboard"
-            size="small"
-            title="复制内容"
-          >
+          <NButton text @click="copyToClipboard" size="small" title="复制内容">
             <NIcon :size="18">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-                <path
-                  fill="currentColor"
-                  d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z"
-                />
+                <path fill="currentColor"
+                  d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z" />
               </svg>
             </NIcon>
           </NButton>
         </template>
-        <NInput
-          v-model:value="textContent"
-          type="textarea"
-          placeholder="获取的文本内容将显示在这里"
-          :rows="10"
-          :disabled="loading"
-        />
+        <NInput v-model:value="textContent" type="textarea" placeholder="获取的文本内容将显示在这里" :rows="10" style="height: 100%;"
+          :disabled="loading" />
       </NCard>
-
-      <!-- 操作按钮 -->
-      <NSpace justify="center" :size="12">
-        <NButton
-          type="primary"
-          @click="parseContent"
-          :loading="loading"
-          size="medium"
-        >
-          解析
-        </NButton>
-        <NButton
-          type="success"
-          @click="saveToTokenManager"
-          :disabled="!isParsed"
-          size="medium"
-        >
-          保存到 Token 管理
-        </NButton>
-      </NSpace>
     </NSpace>
   </div>
 </template>
-

@@ -223,14 +223,25 @@ impl RemoteTokenRecord {
 }
 
 /// 获取 tokens.json 文件路径
+/// 路径: %APPDATA%\com.lantianzhi.aug-session-sync\tokens.json
 fn get_tokens_file_path() -> Result<PathBuf, String> {
-    let exe_path = std::env::current_exe()
-        .map_err(|e| format!("获取可执行文件路径失败: {}", e))?;
-    
-    let exe_dir = exe_path.parent()
-        .ok_or("无法获取可执行文件目录")?;
-    
-    Ok(exe_dir.join("tokens.json"))
+    use std::env;
+
+    // 获取 APPDATA 环境变量
+    let app_data = env::var("APPDATA")
+        .or_else(|_| env::var("HOME").map(|home| format!("{}/.config", home)))
+        .map_err(|e| format!("获取应用数据目录失败: {}", e))?;
+
+    // 构建应用数据目录路径
+    let app_dir = PathBuf::from(app_data).join("com.lantianzhi.aug-session-sync");
+
+    // 确保目录存在
+    if !app_dir.exists() {
+        fs::create_dir_all(&app_dir)
+            .map_err(|e| format!("创建应用数据目录失败: {}", e))?;
+    }
+
+    Ok(app_dir.join("tokens.json"))
 }
 
 /// 读取 tokens.json 文件

@@ -1,17 +1,16 @@
 // 模块声明
 mod http_client;
-mod file_ops;
 mod config;
 mod augment_oauth;
 mod token_manager;
 
 // 导入命令
 use http_client::fetch_text_from_url;
-use file_ops::{read_json_file, append_to_json_file, get_default_file_path, select_file};
 use config::{load_config, save_config};
 use augment_oauth::extract_token_from_session;
 use token_manager::{read_tokens, write_tokens, add_token, import_from_remote, delete_token, update_token};
 use serde::{Deserialize, Serialize};
+use tauri::Manager;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TokenFromSessionResponse {
@@ -43,12 +42,16 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // 当尝试打开第二个实例时，聚焦到已存在的窗口
+            let windows = app.webview_windows();
+            if let Some(window) = windows.values().next() {
+                let _ = window.set_focus();
+                let _ = window.unminimize();
+            }
+        }))
         .invoke_handler(tauri::generate_handler![
             fetch_text_from_url,
-            read_json_file,
-            append_to_json_file,
-            get_default_file_path,
-            select_file,
             load_config,
             save_config,
             parse_session,

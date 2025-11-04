@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, watch, h } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch, h } from 'vue'
 import {
   NCard,
   NSpace,
@@ -15,6 +15,7 @@ import {
   NFormItem,
   NDescriptions,
   NDescriptionsItem,
+  NSelect,
   useMessage
 } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
@@ -28,6 +29,10 @@ const searchKeyword = ref('')
 const sortOption = ref('created_at_desc')
 const currentPage = ref(1)
 const pageSize = ref(15)
+
+// 表格容器引用和高度
+const tableContainerRef = ref(null)
+const tableHeight = ref(600)
 
 // 远端加载对话框
 const showRemoteDialog = ref(false)
@@ -125,7 +130,9 @@ const totalPages = computed(() => {
 })
 
 // 执行搜索
-function handleSearch() {
+async function handleSearch() {
+  // 重新加载本地文件以获取最新数据
+  await loadTokens()
   currentPage.value = 1
 }
 
@@ -146,17 +153,19 @@ function truncateText(text, maxLength = 30) {
   return text.substring(0, maxLength) + '...'
 }
 
-// 格式化时间
+// 格式化时间为统一格式：YYYY-MM-DD HH:mm:ss
 function formatDate(dateString) {
   if (!dateString) return '-'
   const date = new Date(dateString)
-  return date.toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit'
-  })
+
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  const seconds = String(date.getSeconds()).padStart(2, '0')
+
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
 }
 
 // 表格列定义
@@ -164,7 +173,7 @@ const columns = [
   {
     title: 'Session',
     key: 'auth_session',
-    width: 200,
+    width: 120,
     ellipsis: {
       tooltip: true
     },
@@ -182,7 +191,10 @@ const columns = [
   {
     title: '邮箱',
     key: 'email_note',
-    width: 200,
+    width: 180,
+    minWidth: 80,
+    maxWidth: 400,
+    resizable: true,
     ellipsis: {
       tooltip: true
     }
@@ -190,7 +202,7 @@ const columns = [
   {
     title: '账号状态',
     key: 'ban_status',
-    width: 120,
+    width: 100,
     render: (row) => {
       const status = row.ban_status || ''
       let type = 'default'
@@ -218,9 +230,15 @@ const columns = [
     }
   },
   {
+    title: '点数',
+    key: 'credits',
+    width: 100,
+    render: (row) => row.portal_info?.credits_balance || '-'
+  },
+  {
     title: '租户 URL',
     key: 'tenant_url',
-    width: 250,
+    width: 200,
     ellipsis: {
       tooltip: true
     }
@@ -234,32 +252,26 @@ const columns = [
     }
   },
   {
-    title: '点数',
-    key: 'credits',
-    width: 100,
-    render: (row) => row.portal_info?.credits_balance || '-'
-  },
-  {
     title: '创建时间',
     key: 'created_at',
-    width: 150,
+    minWidth: 180,
     render: (row) => formatDate(row.created_at)
   },
   {
     title: '更新时间',
     key: 'updated_at',
-    width: 150,
+    minWidth: 180,
     render: (row) => formatDate(row.updated_at)
   },
   {
     title: '操作',
     key: 'actions',
-    width: 200,
+    width: 180,
     fixed: 'right',
     render: (row) => {
       return h(
         NSpace,
-        { size: 8 },
+        { size: 0 },
         {
           default: () => [
             h(
@@ -451,6 +463,20 @@ async function handleRemoteImport() {
   }
 }
 
+// 计算表格高度
+function calculateTableHeight() {
+  if (tableContainerRef.value) {
+    const containerHeight = tableContainerRef.value.offsetHeight
+    // 减去 NCard 的 padding (上下各 16px = 32px) 和 NCard 自身的边框/间距 (约 2px)
+    tableHeight.value = containerHeight - 66
+  }
+}
+
+// 监听窗口大小变化
+function handleResize() {
+  calculateTableHeight()
+}
+
 // 组件挂载时加载数据
 onMounted(() => {
   loadTokens()
@@ -460,6 +486,19 @@ onMounted(() => {
   if (savedApiUrl) {
     remoteApiUrl.value = savedApiUrl
   }
+
+  // 计算初始高度
+  nextTick(() => {
+    calculateTableHeight()
+  })
+
+  // 监听窗口大小变化
+  window.addEventListener('resize', handleResize)
+})
+
+// 组件卸载时移除监听
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
 })
 
 // 监听 API URL 变化，保存到 localStorage
@@ -474,7 +513,7 @@ watch(remoteApiUrl, (newUrl) => {
   <div style="height: 100%; display: flex; flex-direction: column; padding: 20px;">
     <!-- 顶部工具栏 -->
     <NCard size="small" style="flex-shrink: 0;">
-      <NSpace :size="12">
+      <NSpace :size="12" align="center">
         <NInput
           v-model:value="searchKeyword"
           placeholder="搜索 Token / 邮箱 / Session"
@@ -482,14 +521,14 @@ watch(remoteApiUrl, (newUrl) => {
           clearable
           @keyup.enter="handleSearch"
         />
-        <NButton type="primary" @click="handleSearch">
-          检索
-        </NButton>
         <NSelect
           v-model:value="sortOption"
           :options="sortOptions"
           style="width: 180px;"
         />
+        <NButton type="primary" @click="handleSearch">
+          检索
+        </NButton>
         <NButton @click="showRemoteDialog = true">
           远端加载
         </NButton>
@@ -500,20 +539,26 @@ watch(remoteApiUrl, (newUrl) => {
     </NCard>
 
     <!-- 数据表格 -->
-    <NCard size="small" style="flex: 1; margin-top: 16px; display: flex; flex-direction: column; overflow: hidden;">
-      <div style="flex: 1; overflow: hidden;">
+    <div
+      ref="tableContainerRef"
+      style="flex: 1; margin-top: 16px; min-height: 0; display: flex; flex-direction: column;"
+    >
+      <NCard
+        size="small"
+        :content-style="{ padding: '16px' }"
+        style="height: 100%;"
+      >
         <NDataTable
           :columns="columns"
           :data="paginatedTokens"
           :loading="loading"
           :bordered="false"
           :single-line="false"
-          :scroll-x="1300"
-          :max-height="'100%'"
-          style="height: 100%;"
+          :scroll-x="1580"
+          :max-height="tableHeight"
         />
-      </div>
-    </NCard>
+      </NCard>
+    </div>
 
     <!-- 分页 -->
     <NSpace justify="center" style="flex-shrink: 0; margin-top: 16px;">
@@ -623,20 +668,7 @@ watch(remoteApiUrl, (newUrl) => {
             <span style="font-family: Consolas, monospace;">{{ currentDetailToken.portal_info?.credits_balance || '-' }}</span>
           </NDescriptionsItem>
           <NDescriptionsItem label="过期时间">
-            <span style="font-family: Consolas, monospace;">{{ currentDetailToken.portal_info?.expiry_date || '-' }}</span>
-          </NDescriptionsItem>
-          <NDescriptionsItem label="标签名称">
-            <span style="font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif;">{{ currentDetailToken.tag_name || '-' }}</span>
-          </NDescriptionsItem>
-          <NDescriptionsItem label="标签颜色">
-            <div v-if="currentDetailToken.tag_color" style="display: flex; align-items: center; gap: 8px;">
-              <div :style="{ width: '20px', height: '20px', backgroundColor: currentDetailToken.tag_color, border: '1px solid #ccc' }"></div>
-              <span style="font-family: Consolas, monospace;">{{ currentDetailToken.tag_color }}</span>
-            </div>
-            <span v-else>-</span>
-          </NDescriptionsItem>
-          <NDescriptionsItem label="跳过检查">
-            {{ currentDetailToken.skip_check ? '是' : '否' }}
+            <span style="font-family: Consolas, monospace;">{{ formatDate(currentDetailToken.portal_info?.expiry_date) }}</span>
           </NDescriptionsItem>
           <NDescriptionsItem label="创建时间">
             <span style="font-family: Consolas, monospace;">{{ formatDate(currentDetailToken.created_at) }}</span>
@@ -693,7 +725,7 @@ watch(remoteApiUrl, (newUrl) => {
             <NInput :value="String(currentEditToken.portal_info?.credits_balance || 0)" disabled style="font-family: Consolas, monospace;" />
           </NFormItem>
           <NFormItem label="过期时间">
-            <NInput :value="currentEditToken.portal_info?.expiry_date || '-'" disabled style="font-family: Consolas, monospace;" />
+            <NInput :value="formatDate(currentEditToken.portal_info?.expiry_date)" disabled style="font-family: Consolas, monospace;" />
           </NFormItem>
         </NForm>
       </div>

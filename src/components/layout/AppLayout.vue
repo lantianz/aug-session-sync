@@ -1,5 +1,5 @@
 <template>
-  <n-config-provider :theme="theme">
+  <n-config-provider :theme="theme" style="overflow: hidden;">
     <n-message-provider>
       <!-- 自定义标题栏 -->
       <TitleBar :is-dark="isDark" />
@@ -55,7 +55,7 @@ watch(
   max-width: 1200px;
   margin: 0 auto;
   width: 100%;
-  overflow-y: auto;
+  overflow: hidden;
   background-color: #101014;
 }
 </style>
